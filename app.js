@@ -26,14 +26,14 @@ $('toAbout').onclick=e=>{e.preventDefault();show('about')};
 // ---------- home ----------
 function home(){history.replaceState(null,'',location.pathname);setHeadFor(null);applyLang();
  $('lang').innerHTML=Object.entries(I18N).map(([k,v])=>`<option value="${k}">${v.name}</option>`).join('');$('lang').value=L;
- $('mode').value=setting('mode','touch');$('kid').value=kidName(activeKid());$('praiseSel').value=setting('praise','every');$('checkSel').value=String(setting('checkin',120));renderKids();$('useWeather').checked=setting('weather',true);
+ $('mode').value=setting('mode','touch');$('kid').value=kidName(activeKid());$('praiseSel').value=setting('praise','every');$('checkSel').value=String(setting('checkin',120));$('tempSel').value=setting('tempUnit','auto');renderKids();$('useWeather').checked=setting('weather',true);
  const R=allR();$('rlist').innerHTML='';
  Object.values(R).filter(r=>!r.kid||r.kid===activeKid()).forEach(r=>{const d=document.createElement('div');d.className='rrow';
   d.innerHTML=`<button class="rbtn" style="background:${r.color}">${r.emoji} ${esc(r.name)}</button><button class="s" title="edit">✏️</button><button class="s" title="home screen">📲</button>`;
   const b=d.querySelectorAll('button');b[0].onclick=()=>canRun()?start(r.id):show('paywall');b[1].onclick=()=>openEditor(r.id);b[2].onclick=()=>{OB_R=r;wiz.page='hs';wiz.single=true;show('ob');renderOb()};
   $('rlist').appendChild(d)});renderSub();show('home')}
 $('lang').onchange=()=>{L=$('lang').value;LS.set('lang',L);home()};
-$('mode').onchange=()=>LS.set('mode',$('mode').value);$('kid').onchange=()=>{setKidName($('kid').value.trim());renderKids()};$('praiseSel').onchange=()=>LS.set('praise',$('praiseSel').value);$('checkSel').onchange=()=>LS.set('checkin',+$('checkSel').value);$('useWeather').onchange=()=>LS.set('weather',$('useWeather').checked);
+$('mode').onchange=()=>LS.set('mode',$('mode').value);$('kid').onchange=()=>{setKidName($('kid').value.trim());renderKids()};$('tempSel').onchange=()=>LS.set('tempUnit',$('tempSel').value);$('praiseSel').onchange=()=>LS.set('praise',$('praiseSel').value);$('checkSel').onchange=()=>LS.set('checkin',+$('checkSel').value);$('useWeather').onchange=()=>LS.set('weather',$('useWeather').checked);
 $('newR').onclick=()=>canCreate()?startWizard(true):show('paywall');
 function renderKids(){const k=kids(),a=activeKid(),bar=$('kidBar');
  bar.innerHTML=(k.length>1||k[0].name?k.map(x=>`<button class="chip${x.id===a?' on':''}" data-kid="${x.id}">🧒 ${esc(x.name||'…')}</button>`).join(''):'')+`<button class="chip" id="addKid">＋ ${esc(t('addKid'))}</button>`;
@@ -156,14 +156,22 @@ function routeLaunch(url){let id=null,data=null;try{const u=new URL(url);id=u.se
  if(NATIVE){start(id);return true} // native TTS needs no tap
  setHeadFor(r);$('lIcon').style.background=r.color;$('lIcon').textContent=r.emoji;$('lName').textContent=r.name;$('lStart').onclick=()=>start(id);show('launch');return true} // browsers only allow speech after a tap
 // ---------- weather (optional, device location) ----------
-let TEMP=null;const FAHR=/^en-US/.test(navigator.language||'en-US');
+// Temperature unit follows where the device actually is (not the UI language). Decisions are made in °C; °F only for speaking.
+const F_COUNTRIES=['US','PR','GU','VI','AS','MP','UM','LR','BS','BZ','KY','PW','FM','MH'];
+let TEMP_C=null;
+function regionFromDevice(){for(const l of [...(navigator.languages||[]),navigator.language,Intl.DateTimeFormat().resolvedOptions().locale]){try{const r=new Intl.Locale(l).maximize().region;if(r&&/^[A-Z]{2}$/.test(r))return r}catch(e){}}return null}
+function useF(){const o=setting('tempUnit','auto');if(o==='F')return true;if(o==='C')return false;const c=setting('country',null)||regionFromDevice();return F_COUNTRIES.includes(c)}
+function timeoutFetch(url,ms){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);return fetch(url,{signal:c.signal}).finally(()=>clearTimeout(t))}
+async function countryFromCoords(lat,lon){try{const d=await (await timeoutFetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`,4000)).json();
+  if(d&&/^[A-Z]{2}$/.test(d.countryCode||'')){LS.set('country',d.countryCode);return d.countryCode}}catch(e){}return null}
 function getWeather(){if(!setting('weather',true)||!navigator.geolocation)return;
- navigator.geolocation.getCurrentPosition(p=>{fetch(`https://api.open-meteo.com/v1/forecast?latitude=${p.coords.latitude.toFixed(2)}&longitude=${p.coords.longitude.toFixed(2)}&current=temperature_2m${FAHR?'&temperature_unit=fahrenheit':''}`)
-  .then(r=>r.json()).then(d=>TEMP=d.current.temperature_2m).catch(()=>{})},()=>{},{timeout:8000,maximumAge:36e5})}
+ navigator.geolocation.getCurrentPosition(p=>{const lat=p.coords.latitude.toFixed(2),lon=p.coords.longitude.toFixed(2);countryFromCoords(lat,lon);
+  timeoutFetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m`,6000).then(r=>r.json()).then(d=>TEMP_C=d.current.temperature_2m).catch(()=>{})},
+  ()=>{},{timeout:8000,maximumAge:36e5})}
 // ---------- runner ----------
 let R=null,RS=null,steps=[],i=0,active=false,paused=false,voice=false,tm=[],check,run=0;
-function weatherText(){if(TEMP==null)return RS.wNone;const n=Math.round(TEMP);return(n<(FAHR?50:10)?RS.wCold:RS.wMild).replace('{t}',n)}
-const warm=()=>TEMP!=null&&TEMP>=(FAHR?65:18);
+function weatherText(){if(TEMP_C==null)return RS.wNone;const n=Math.round(useF()?TEMP_C*9/5+32:TEMP_C);return(TEMP_C<10?RS.wCold:RS.wMild).replace('{t}',n)} // cold < 10 °C (= 50 °F)
+const warm=()=>TEMP_C!=null&&TEMP_C>=18.3; // skip jacket at 18.3 °C (= 65 °F) or warmer
 const T=x=>typeof x==='string'?x:x.weather?weatherText():x.text;
 const later=(ms,f)=>{const r=run;tm.push(setTimeout(()=>{if(active&&!paused&&r===run)f()},ms))};
 const clr=()=>{tm.forEach(clearTimeout);tm=[];clearTimeout(check)};

@@ -1,5 +1,5 @@
 // Service worker: offline cache + per-routine manifest/icon so "Add to Home Screen" on Android uses the routine's name and icon.
-const C='rb-v4';
+const C='rb-v5';
 self.addEventListener('install',e=>{self.skipWaiting();e.waitUntil(caches.open(C).then(c=>c.addAll(['./','index.html','style.css','i18n.js','i18n-ob.js','i18n-sub.js','i18n-ux.js','i18n-ux2.js','speech.js','subscription.js','app.js','icon-192.png','icon-512.png'])))});
 self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
 async function icon(e,c,size){try{const cv=new OffscreenCanvas(size,size),g=cv.getContext('2d');g.fillStyle=c;g.fillRect(0,0,size,size);g.font=`${size*.6}px serif`;g.textAlign='center';g.textBaseline='middle';g.fillText(e,size/2,size*.55);
