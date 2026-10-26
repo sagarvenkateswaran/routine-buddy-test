@@ -4,7 +4,8 @@ const DAY=864e5,OFFLINE_GRACE=3*DAY;
 const SUB={
  REVENUECAT_IOS_KEY:'appl_REPLACE_ME',REVENUECAT_ANDROID_KEY:'goog_REPLACE_ME', // TODO(Sagar): public SDK keys only
  ENTITLEMENT:'pro',PRODUCTS:{monthly:'routinebuddy_pro_monthly',yearly:'routinebuddy_pro_yearly'},
- TRIAL_DAYS:7, // web preview only; native trial = store intro offer
+ TRIAL_DAYS:7, // web preview only; native trial = 7-day free intro offer on both products
+ // Prices (set in the stores, not here): monthly $4.99, yearly $39.99, 7-day free trial. Both are standard Apple & Google price points.
  status:null,   // {active,willRenew,exp,billingIssue,product,managementURL,source:'live'|'cache'}
  offline:false,_cbs:[],
  native(){return window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()&&Capacitor.Plugins.Purchases},
