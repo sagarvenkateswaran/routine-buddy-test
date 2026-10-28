@@ -10,8 +10,10 @@ const isStandalone=()=>!NATIVE&&(window.matchMedia('(display-mode: standalone)')
 const isIOSSafari=()=>{const ua=navigator.userAgent;return IOS_UA&&/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS/i.test(ua)};
 let deferredPrompt=null;
 if(!NATIVE)window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e});
+let _syncT=null;function queueSyncUrl(r){if(NATIVE||isStandalone())return;clearTimeout(_syncT);_syncT=setTimeout(()=>syncHomeUrl(r),0)}
 // ---------- storage ----------
-const allR=()=>LS.get('routines',{}),saveR=r=>LS.set('routines',r);
+const allR=()=>LS.get('routines',{});
+function saveR(r){LS.set('routines',r);queueSyncUrl()}
 const setting=(k,d)=>LS.get(k,d);
 function t(k,v){let s=S()[k];if(s==null)s=I18N.en[k];if(v)for(const x in v)s=s.split('{'+x+'}').join(v[x]);return s}
 function applyLang(){const s=S();document.documentElement.lang=L;document.documentElement.dir=s.rtl?'rtl':'ltr';Speech.lang=s.tts;
@@ -28,7 +30,7 @@ $('restore').onclick=async()=>{if(await SUB.restore())home()};$('trial').onclick
 document.querySelectorAll('.toHome').forEach(a=>a.onclick=e=>{e.preventDefault();home()});
 $('toAbout').onclick=e=>{e.preventDefault();show('about')};
 // ---------- home ----------
-function home(){history.replaceState(null,'',location.pathname);setHeadFor(null);applyLang();
+function home(){syncHomeUrl();applyLang();
  $('lang').innerHTML=Object.entries(I18N).map(([k,v])=>`<option value="${k}">${v.name}</option>`).join('');$('lang').value=L;
  $('mode').value=setting('mode','touch');$('kid').value=kidName(activeKid());$('praiseSel').value=setting('praise','every');$('checkSel').value=String(setting('checkin',120));$('tempSel').value=setting('tempUnit','auto');renderKids();$('useWeather').checked=setting('weather',true);
  const R=allR();$('rlist').innerHTML='';
@@ -37,7 +39,7 @@ function home(){history.replaceState(null,'',location.pathname);setHeadFor(null)
   const b=d.querySelectorAll('button');b[0].onclick=()=>canRun()?start(r.id):show('paywall');b[1].onclick=()=>openEditor(r.id);b[2].onclick=()=>{OB_R=r;wiz.page='hs';wiz.single=true;show('ob');renderOb()};
   $('rlist').appendChild(d)});renderSub();show('home')}
 $('lang').onchange=()=>{L=$('lang').value;LS.set('lang',L);home()};
-$('mode').onchange=()=>LS.set('mode',$('mode').value);$('kid').onchange=()=>{setKidName($('kid').value.trim());renderKids()};$('tempSel').onchange=()=>LS.set('tempUnit',$('tempSel').value);$('praiseSel').onchange=()=>LS.set('praise',$('praiseSel').value);$('checkSel').onchange=()=>LS.set('checkin',+$('checkSel').value);$('useWeather').onchange=()=>LS.set('weather',$('useWeather').checked);
+$('mode').onchange=()=>{LS.set('mode',$('mode').value);queueSyncUrl()};$('kid').onchange=()=>{setKidName($('kid').value.trim());renderKids();queueSyncUrl()};$('tempSel').onchange=()=>{LS.set('tempUnit',$('tempSel').value);queueSyncUrl()};$('praiseSel').onchange=()=>{LS.set('praise',$('praiseSel').value);queueSyncUrl()};$('checkSel').onchange=()=>{LS.set('checkin',+$('checkSel').value);queueSyncUrl()};$('useWeather').onchange=()=>{LS.set('weather',$('useWeather').checked);queueSyncUrl()};
 $('newR').onclick=()=>canCreate()?startWizard(true):show('paywall');
 function renderKids(){const k=kids(),a=activeKid(),bar=$('kidBar');
  bar.innerHTML=(k.length>1||k[0].name?k.map(x=>`<button class="chip${x.id===a?' on':''}" data-kid="${x.id}">🧒 ${esc(x.name||'…')}</button>`).join(''):'')+`<button class="chip" id="addKid">＋ ${esc(t('addKid'))}</button>`;
@@ -126,18 +128,23 @@ $('obBack').onclick=()=>{const i=wiz.pages.indexOf(wiz.page);if(i>0){wiz.page=wi
 $('obNext').onclick=()=>{const p=wiz.page;
  if(p==='hs'){wiz={};return home()}
  if(p==='steps'){if(!wiz.items.some(x=>x.on))return;const keep=wiz.draft;wiz.draft=makeRoutine(wiz.type,wiz.items);if(keep){wiz.draft.id=keep.id;wiz.draft.name=keep.name;wiz.draft.emoji=keep.emoji;wiz.draft.color=keep.color;wiz.draft.doneBy=keep.doneBy}}
- if(p==='look'){const R=allR();wiz.draft.name=(wiz.draft.name||'').trim()||t('makeOwn');R[wiz.draft.id]=wiz.draft;saveR(R);OB_R=wiz.draft}
+ if(p==='look'){const R=allR();wiz.draft.name=(wiz.draft.name||'').trim()||t('makeOwn');R[wiz.draft.id]=wiz.draft;saveR(R);OB_R=wiz.draft;syncHomeUrl(wiz.draft)}
  wiz.page=wiz.pages[wiz.pages.indexOf(p)+1];renderOb()};
 // ---------- children ----------
 function kids(){let k=LS.get('kids',null);if(!k){k=[{id:'k1',name:setting('kid','')}];LS.set('kids',k);LS.set('kidActive','k1')}return k}
 const activeKid=()=>{const k=kids(),a=setting('kidActive',k[0].id);return k.some(x=>x.id===a)?a:k[0].id};
 const kidName=id=>(kids().find(x=>x.id===id)||{}).name||'';
-function setKidName(n){const k=kids(),a=activeKid();k.forEach(x=>{if(x.id===a)x.name=n});LS.set('kids',k)}
+function setKidName(n){const k=kids(),a=activeKid();k.forEach(x=>{if(x.id===a)x.name=n});LS.set('kids',k);queueSyncUrl()}
 // ---------- home-screen entry per routine ----------
 function b64(o){return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function unb64(s){try{return JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g,'+').replace(/_/g,'/')))))}catch(e){return null}}
 function packSetup(r){return{r,kidName:kidName(r.kid||activeKid()),mode:setting('mode','touch'),lang:L,tempUnit:setting('tempUnit','auto'),praise:setting('praise','every'),checkin:setting('checkin',120),weather:setting('weather',true),device:setting('device',wiz.device||null),country:setting('country',null)}}
 function launchUrl(r){const d=b64(packSetup(r));return location.origin+location.pathname+'?r='+encodeURIComponent(r.id)+'&d='+d} // query carries setup: iOS home-screen web apps get empty storage
+function primaryRoutine(){const R=allR(),kid=activeKid();const list=Object.values(R).filter(r=>!r.kid||r.kid===kid);return list[0]||Object.values(R)[0]||null}
+// Keep the address bar + manifest packed whenever Safari/Chrome has a saved setup, so Share → Add to Home Screen works even without tapping Save.
+function syncHomeUrl(r){if(NATIVE||isStandalone())return;r=r||primaryRoutine();
+ if(!r){if(!/\?r=/.test(location.search))return;history.replaceState(null,'',location.pathname);setHeadFor(null);return}
+ const url=launchUrl(r);if(location.href!==url)history.replaceState(null,'',url);setHeadFor(r)}
 function iconDataUrl(r,size=180){const c=document.createElement('canvas');c.width=c.height=size;const g=c.getContext('2d');g.fillStyle=r.color||'#4f46e5';g.fillRect(0,0,size,size);
  g.font=`${size*.6}px serif`;g.textAlign='center';g.textBaseline='middle';g.fillText(r.emoji||'⭐',size/2,size*.55);return c.toDataURL('image/png')}
 function setHeadFor(r){document.title=r?r.name:'DigiMaa';$('appTitle').content=r?r.name:'DigiMaa';
@@ -265,5 +272,7 @@ $('erDel').onclick=()=>{if(!confirm(t('del')+'?'))return;const R=allR();delete R
 (async()=>{await SUB.init();applyLang();
  if(NATIVE&&NP('App')){NP('App').addListener('appUrlOpen',e=>routeLaunch(e.url));try{const u=await NP('App').getLaunchUrl();if(u&&u.url&&routeLaunch(u.url))return}catch(e){}}
  if(routeLaunch(location.href))return;
- if(!Object.keys(allR()).length)return startWizard(false);home()})();
+ // Safari (not home-screen yet): keep URL packed so Share → Add to Home Screen carries the routine
+ if(!Object.keys(allR()).length)return startWizard(false);home();
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')queueSyncUrl()})})();
 if('serviceWorker'in navigator&&!NATIVE&&(location.protocol==='https:'||location.hostname==='127.0.0.1'||location.hostname==='localhost'))navigator.serviceWorker.register('sw.js').catch(()=>{});
