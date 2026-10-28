@@ -6,6 +6,10 @@ let L=LS.get('lang',null)||(I18N[nav2]?nav2:'en');const S=()=>I18N[L],SL=l=>I18N
 const EMOJIS=['☀️','🌙','📚','🪥','🚿','🧸','🎒','⭐','🌈','🦖','⚽','🎨'],COLORS=['#f97316','#1e3a8a','#16a34a','#db2777','#7c3aed','#0891b2','#ca8a04','#dc2626'];
 const IOS_UA=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const PLATFORM=NATIVE?Capacitor.getPlatform():null; // 'ios' | 'android' | null (web)
+const isStandalone=()=>!NATIVE&&(window.matchMedia('(display-mode: standalone)').matches||!!navigator.standalone);
+const isIOSSafari=()=>{const ua=navigator.userAgent;return IOS_UA&&/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS/i.test(ua)};
+let deferredPrompt=null;
+if(!NATIVE)window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e});
 // ---------- storage ----------
 const allR=()=>LS.get('routines',{}),saveR=r=>LS.set('routines',r);
 const setting=(k,d)=>LS.get(k,d);
@@ -132,26 +136,53 @@ function setKidName(n){const k=kids(),a=activeKid();k.forEach(x=>{if(x.id===a)x.
 // ---------- home-screen entry per routine ----------
 function b64(o){return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function unb64(s){try{return JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g,'+').replace(/_/g,'/')))))}catch(e){return null}}
-function launchUrl(r){return location.origin+location.pathname+'?r='+r.id+'#d='+b64({r,kidName:kidName(r.kid||activeKid()),mode:setting('mode','touch')})} // hash carries the routine: iOS home-screen web apps get their own empty storage
-function iconDataUrl(r,size=180){const c=document.createElement('canvas');c.width=c.height=size;const g=c.getContext('2d');g.fillStyle=r.color;g.fillRect(0,0,size,size);
- g.font=`${size*.6}px serif`;g.textAlign='center';g.textBaseline='middle';g.fillText(r.emoji,size/2,size*.55);return c.toDataURL('image/png')}
+function packSetup(r){return{r,kidName:kidName(r.kid||activeKid()),mode:setting('mode','touch'),lang:L,tempUnit:setting('tempUnit','auto'),praise:setting('praise','every'),checkin:setting('checkin',120),weather:setting('weather',true),device:setting('device',wiz.device||null),country:setting('country',null)}}
+function launchUrl(r){const d=b64(packSetup(r));return location.origin+location.pathname+'?r='+encodeURIComponent(r.id)+'&d='+d} // query carries setup: iOS home-screen web apps get empty storage
+function iconDataUrl(r,size=180){const c=document.createElement('canvas');c.width=c.height=size;const g=c.getContext('2d');g.fillStyle=r.color||'#4f46e5';g.fillRect(0,0,size,size);
+ g.font=`${size*.6}px serif`;g.textAlign='center';g.textBaseline='middle';g.fillText(r.emoji||'⭐',size/2,size*.55);return c.toDataURL('image/png')}
 function setHeadFor(r){document.title=r?r.name:'DigiMaa';$('appTitle').content=r?r.name:'DigiMaa';
- $('touchIcon').href=r?iconDataUrl(r):'icon-192.png';
- $('manifest').href=r?`manifest.webmanifest?r=${encodeURIComponent(r.id)}&n=${encodeURIComponent(r.name)}&e=${encodeURIComponent(r.emoji)}&c=${encodeURIComponent(r.color)}`:'manifest.webmanifest'}
-function renderHS(B,r){const dev=setting('device',wiz.device||'ios');setHeadFor(r);
+ $('touchIcon').href=r?iconDataUrl(r,180):'icon-192.png';
+ if(!r){$('manifest').href='manifest.webmanifest';return}
+ // Dynamic manifest (SW-generated): name = parent's chosen routine name; start_url carries full setup in ?d=
+ const d=b64(packSetup(r));
+ $('manifest').href=`manifest.webmanifest?r=${encodeURIComponent(r.id)}&n=${encodeURIComponent(r.name)}&e=${encodeURIComponent(r.emoji||'⭐')}&c=${encodeURIComponent(r.color||'#4f46e5')}&d=${d}`}
+function showHSAfterSave(r){if(!r)return home();if(NATIVE||isStandalone())return home();OB_R=r;wiz={page:'hs',single:true};show('ob');renderOb()}
+function renderHS(B,r){const dev=setting('device',wiz.device||(IOS_UA?'ios':'android'));setHeadFor(r);
+ if(!NATIVE)history.replaceState(null,'',launchUrl(r)); // Add to Home Screen / install saves the CURRENT url, name and icon
  let body='';
  if(PLATFORM==='android')body=`<p>${esc(t('hsNativeA',{r:r.name}))}</p><button class="big" id="pinBtn">📲 ${esc(t('pin'))}</button>`;
  else if(PLATFORM==='ios')body=`<p>${esc(t('hsNativeI',{r:r.name}))}</p><code id="lnk">digimaa://run?r=${r.id}</code><button id="cpBtn">${esc(t('copyLink'))}</button>`;
- else{history.replaceState(null,'',launchUrl(r)); // Add to Home Screen saves the CURRENT url, name and icon
-  body=`<p>${esc(dev==='ios'?t('hsIOS',{r:r.name}):t('hsAndroid',{r:r.name}))}</p><code id="lnk">${esc(launchUrl(r))}</code><button id="cpBtn">${esc(t('copyLink'))}</button>`}
+ else if(isStandalone())body=`<p class="muted">${esc(t('hsAlready'))}</p>`;
+ else if(IOS_UA){
+  if(isIOSSafari())body=`<div class="hsGuide"><p class="hsLead">${esc(t('hsIOSTitle',{r:r.name}))}</p>
+   <ol class="hsSteps"><li><div class="hsIcon share" aria-hidden="true"><svg viewBox="0 0 24 24" width="36" height="36"><path fill="#4f46e5" d="M12 3l4 4h-3v8h-2V7H8l4-4zm-7 14h14v2H5v-2z"/></svg></div><div>${esc(t('hsIOS1'))}</div></li>
+   <li><div class="hsIcon">＋⬜</div><div>${esc(t('hsIOS2'))}</div></li>
+   <li><div class="hsIcon">✓</div><div>${esc(t('hsIOS3'))}</div></li></ol>
+   <div class="hsArrow" aria-hidden="true"><span>${esc(t('hsIOSShare'))}</span><div class="hsShareBtn">□↑</div></div></div>`;
+  else body=`<p>${esc(t('hsIOSOther'))}</p><div class="hsGuide"><ol class="hsSteps"><li><div class="hsIcon share">□↑</div><div>${esc(t('hsIOS1'))}</div></li><li><div class="hsIcon">＋⬜</div><div>${esc(t('hsIOS2'))}</div></li><li><div class="hsIcon">✓</div><div>${esc(t('hsIOS3'))}</div></li></ol></div>`}
+ else{
+  if(deferredPrompt)body=`<p>${esc(t('homeTitle',{r:r.name}))}</p><button class="big" id="installBtn">📲 ${esc(t('hsAdd'))}</button>`;
+  else body=`<p>${esc(t('hsAndroidGuide',{r:r.name}))}</p>`}
  B.innerHTML=`<div class="q">${esc(t('homeTitle',{r:r.name}))}</div><div class="bigicon" style="background:${r.color}">${r.emoji}</div><h3 style="text-align:center">${esc(r.name)}</h3>${body}
+  ${(!NATIVE&&!isStandalone())?`<button class="ghost" id="notNow">${esc(t('later'))}</button>`:''}
   <button class="big" id="openR">${esc(t('openR'))}</button>`+(setting('mode','touch')==='voice'?`<p class="muted">${esc(dev==='ios'?t('speechIOS'):t('speechAndroid'))}</p>`:'');
  if($('pinBtn'))$('pinBtn').onclick=()=>NP('RoutineShortcuts').pin({id:r.id,label:r.name,emoji:r.emoji,color:r.color}).catch(e=>alert(e.message||e));
  if($('cpBtn'))$('cpBtn').onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText($('lnk').textContent);$('cpBtn').textContent=t('copied')};
+ if($('installBtn'))$('installBtn').onclick=async()=>{if(!deferredPrompt)return;deferredPrompt.prompt();try{await deferredPrompt.userChoice}catch(e){}deferredPrompt=null;$('installBtn').hidden=true};
+ if($('notNow'))$('notNow').onclick=()=>{wiz={};home()};
  $('openR').onclick=()=>canRun()?start(r.id):show('paywall')}
 // ---------- launching straight into a routine ----------
-function routeLaunch(url){let id=null,data=null;try{const u=new URL(url);id=u.searchParams.get('r');const m=/[#&]d=([^&]+)/.exec(u.hash);if(m)data=unb64(m[1])}catch(e){}
- if(!id)return false;const R=allR();if(data&&data.r&&!R[id]){R[id]=data.r;saveR(R);if(data.kidName){const k=kids();let c=k.find(x=>x.name===data.kidName);if(!c){if(k.length===1&&!k[0].name){k[0].name=data.kidName;c=k[0]}else{c={id:'k'+Date.now().toString(36),name:data.kidName};k.push(c)}LS.set('kids',k)}R[id].kid=c.id;saveR(R)}if(data.mode&&!localStorage.mode)LS.set('mode',data.mode)}
+function routeLaunch(url){let id=null,data=null;try{const u=new URL(url,location.origin);id=u.searchParams.get('r');
+  const dq=u.searchParams.get('d');if(dq)data=unb64(dq);else{const m=/[#&?]d=([^&]+)/.exec(u.hash||'');if(m)data=unb64(m[1])}}catch(e){}
+ if(!id&&data&&data.r)id=data.r.id;if(!id)return false;
+ const empty=!Object.keys(allR()).length; // iOS home-screen apps start with empty storage — import packed setup
+ if(data&&data.r&&(empty||!allR()[id])){if(empty){if(data.lang&&I18N[data.lang]){L=data.lang;LS.set('lang',L)}
+  if(data.mode)LS.set('mode',data.mode);if(data.tempUnit)LS.set('tempUnit',data.tempUnit);if(data.praise)LS.set('praise',data.praise);
+  if(data.checkin!=null)LS.set('checkin',data.checkin);if(data.weather!=null)LS.set('weather',data.weather);
+  if(data.device)LS.set('device',data.device);if(data.country)LS.set('country',data.country)}
+  const R=allR();R[id]=data.r;saveR(R);
+  if(data.kidName){const k=kids();let c=k.find(x=>x.name===data.kidName);if(!c){if(k.length===1&&!k[0].name){k[0].name=data.kidName;c=k[0]}else{c={id:'k'+Date.now().toString(36),name:data.kidName};k.push(c)}LS.set('kids',k)}
+   R[id].kid=c.id;LS.set('kidActive',c.id);saveR(R)}}
  const r=allR()[id];if(!r)return false;if(!canRun()){show('paywall');return true}
  if(NATIVE){start(id);return true} // native TTS needs no tap
  setHeadFor(r);$('lIcon').style.background=r.color;$('lIcon').textContent=r.emoji;$('lName').textContent=r.name;$('lStart').onclick=()=>start(id);show('launch');return true} // browsers only allow speech after a tap
@@ -208,12 +239,12 @@ let wake;async function keepAwake(){try{if(NP('KeepAwake'))return NP('KeepAwake'
 function releaseWake(){try{if(NP('KeepAwake'))return NP('KeepAwake').allowSleep();wake&&wake.release()}catch(e){}}
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&active)keepAwake()});
 // ---------- step editor (used by review page and ✏️) ----------
-function renderSteps(box,r){const dn=dayNames();box.innerHTML='<ol class="tl" style="padding:0"></ol><div class="row"><button class="as">'+esc(t('add'))+'</button><button class="aw">'+esc(t('weatherStep'))+'</button></div><p class="muted small">⏱ '+esc(t('timer'))+'</p>';
+function renderSteps(box,r){const dn=dayNames();box.innerHTML='<ol class="tl" style="padding:0"></ol><div class="row"><button class="as">'+esc(t('add'))+'</button><button class="aw">'+esc(t('weatherStep'))+'</button></div><p class="muted small">⏱ '+esc(t('timerEdit')||t('timer'))+'</p>';
  const ol=box.querySelector('ol');r.steps=r.steps.map(x=>typeof x==='string'?{text:x}:x);
  r.steps.forEach((x,n)=>{const li=document.createElement('li');li.style.display='block';
-  li.innerHTML=(x.weather?`<b>🌦 ${esc(t('weatherStep'))}</b>`:`<input type="text" class="tx" style="width:100%;font-size:1em;padding:6px">`)+`<div class="opts row small">⏱<input type="number" min="0" class="wt" style="width:64px">`+
+  li.innerHTML=(x.weather?`<b>🌦 ${esc(t('weatherStep'))}</b>`:`<input type="text" class="tx" style="width:100%;font-size:1em;padding:6px">`)+`<div class="opts row small">⏱ <input type="number" min="0" step="1" class="wt" style="width:64px" placeholder="0" inputmode="numeric"> <span class="muted">${esc(t('minutes'))}</span> `+
    dn.map((d,j)=>`<label class="row" style="margin:0"><input type="checkbox" class="dy" data-d="${j}">${d}</label>`).join('')+`<button class="up">↑</button><button class="dn">↓</button><button class="rm">✕</button></div>`;
-  if(!x.weather)li.querySelector('.tx').value=x.text||'';li.querySelector('.wt').value=x.wait||0;
+  if(!x.weather)li.querySelector('.tx').value=x.text||'';li.querySelector('.wt').value=x.wait?Math.round(x.wait/60):'';
   li.querySelectorAll('.dy').forEach(c=>c.checked=!x.days||!x.days.length||x.days.includes(+c.dataset.d));
   const re=f=>()=>{collectSteps(box,r);f();renderSteps(box,r)};
   li.querySelector('.up').onclick=re(()=>{if(n>0)[r.steps[n-1],r.steps[n]]=[r.steps[n],r.steps[n-1]]});
@@ -222,13 +253,13 @@ function renderSteps(box,r){const dn=dayNames();box.innerHTML='<ol class="tl" st
  box.querySelector('.as').onclick=()=>{collectSteps(box,r);r.steps.push({text:''});renderSteps(box,r)};
  box.querySelector('.aw').onclick=()=>{collectSteps(box,r);r.steps.push({weather:true});renderSteps(box,r)}}
 function collectSteps(box,r){[...box.querySelectorAll('ol>li')].forEach((li,n)=>{const x=r.steps[n];if(!x)return;
- if(!x.weather)x.text=li.querySelector('.tx').value;const w=+li.querySelector('.wt').value||0;if(w>0){x.wait=w;x.auto=x.auto||true}else{delete x.wait;delete x.auto}
+ if(!x.weather)x.text=li.querySelector('.tx').value;const mins=+li.querySelector('.wt').value||0;if(mins>0){x.wait=mins*60;x.auto=x.auto||true}else{delete x.wait;delete x.auto} // minutes in UI, seconds stored (same as wizard)
  const d=[...li.querySelectorAll('.dy')].filter(c=>c.checked).map(c=>+c.dataset.d);if(d.length===7||!d.length)delete x.days;else x.days=d});
  r.steps=r.steps.filter(x=>x.weather||(x.text||'').trim()!==''||!box.isConnected)}
 let EDR=null;
 function openEditor(id){EDR=clone(allR()[id]);show('edit');applyLang();$('erName').value=EDR.name;$('erDoneBy').value=EDR.doneBy||'';renderSteps($('erSteps'),EDR)}
-$('erSave').onclick=()=>{collectSteps($('erSteps'),EDR);EDR.name=$('erName').value.trim()||EDR.name;EDR.doneBy=$('erDoneBy').value;const R=allR();R[EDR.id]=EDR;saveR(R);home()};
-$('erHS').onclick=()=>{$('erSave').onclick();OB_R=allR()[EDR.id];wiz={page:'hs',single:true};show('ob');renderOb()};
+$('erSave').onclick=()=>{collectSteps($('erSteps'),EDR);EDR.name=$('erName').value.trim()||EDR.name;EDR.doneBy=$('erDoneBy').value;const R=allR();R[EDR.id]=EDR;saveR(R);showHSAfterSave(allR()[EDR.id])};
+$('erHS').onclick=()=>$('erSave').onclick();
 $('erDel').onclick=()=>{if(!confirm(t('del')+'?'))return;const R=allR();delete R[EDR.id];saveR(R);home()};
 // ---------- boot ----------
 (async()=>{await SUB.init();applyLang();
