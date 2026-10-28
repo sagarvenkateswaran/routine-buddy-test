@@ -3,7 +3,7 @@
 const DAY=864e5,OFFLINE_GRACE=3*DAY;
 const SUB={
  REVENUECAT_IOS_KEY:'appl_REPLACE_ME',REVENUECAT_ANDROID_KEY:'goog_REPLACE_ME', // TODO(Sagar): public SDK keys only
- ENTITLEMENT:'pro',PRODUCTS:{monthly:'routinebuddy_pro_monthly',yearly:'routinebuddy_pro_yearly'},
+ ENTITLEMENT:'pro',PRODUCTS:{monthly:'digimaa_pro_monthly',yearly:'digimaa_pro_yearly'},
  TRIAL_DAYS:7, // web preview only; native trial = 7-day free intro offer on both products
  // Prices (set in the stores, not here): monthly $4.99, yearly $39.99, 7-day free trial. Both are standard Apple & Google price points.
  status:null,   // {active,willRenew,exp,billingIssue,product,managementURL,source:'live'|'cache'}
@@ -45,7 +45,7 @@ const SUB={
   if(s.willRenew===false&&s.exp&&s.exp-Date.now()<3*DAY)return 'expiring';return null},
  manageURL(){const s=this.status;if(s&&s.managementURL)return s.managementURL;
   const plat=window.Capacitor&&Capacitor.getPlatform?Capacitor.getPlatform():(/Android/i.test(navigator.userAgent)?'android':'ios');
-  return plat==='android'?'https://play.google.com/store/account/subscriptions?package=com.netzerostrategic.routinebuddy':'https://apps.apple.com/account/subscriptions'},
+  return plat==='android'?'https://play.google.com/store/account/subscriptions?package=com.netzerostrategic.digimaa':'https://apps.apple.com/account/subscriptions'},
  storeName(){const a=(window.Capacitor&&Capacitor.getPlatform&&Capacitor.getPlatform()==='android')||/Android/i.test(navigator.userAgent);return a?'Google Play':'App Store'},
  async buy(which){const P=this.native();
   if(!P){if(confirm('Web preview: no real payment. Simulate an active subscription?')){localStorage.devPro='1';localStorage.removeItem('fakeCI');await this.refresh()}return this.hasPro()}

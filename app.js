@@ -1,4 +1,4 @@
-// Routine Buddy – onboarding wizard, multi-routine home, per-routine launch, runner, editor. © Net Zero Strategic, LLC
+// DigiMaa – onboarding wizard, multi-routine home, per-routine launch, runner, editor. © Net Zero Strategic, LLC
 const $=id=>document.getElementById(id),clone=o=>JSON.parse(JSON.stringify(o)),esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const LS={get:(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 const nav2=(navigator.language||'en').slice(0,2);
@@ -135,13 +135,13 @@ function unb64(s){try{return JSON.parse(decodeURIComponent(escape(atob(s.replace
 function launchUrl(r){return location.origin+location.pathname+'?r='+r.id+'#d='+b64({r,kidName:kidName(r.kid||activeKid()),mode:setting('mode','touch')})} // hash carries the routine: iOS home-screen web apps get their own empty storage
 function iconDataUrl(r,size=180){const c=document.createElement('canvas');c.width=c.height=size;const g=c.getContext('2d');g.fillStyle=r.color;g.fillRect(0,0,size,size);
  g.font=`${size*.6}px serif`;g.textAlign='center';g.textBaseline='middle';g.fillText(r.emoji,size/2,size*.55);return c.toDataURL('image/png')}
-function setHeadFor(r){document.title=r?r.name:'Routine Buddy';$('appTitle').content=r?r.name:'Routine Buddy';
+function setHeadFor(r){document.title=r?r.name:'DigiMaa';$('appTitle').content=r?r.name:'DigiMaa';
  $('touchIcon').href=r?iconDataUrl(r):'icon-192.png';
  $('manifest').href=r?`manifest.webmanifest?r=${encodeURIComponent(r.id)}&n=${encodeURIComponent(r.name)}&e=${encodeURIComponent(r.emoji)}&c=${encodeURIComponent(r.color)}`:'manifest.webmanifest'}
 function renderHS(B,r){const dev=setting('device',wiz.device||'ios');setHeadFor(r);
  let body='';
  if(PLATFORM==='android')body=`<p>${esc(t('hsNativeA',{r:r.name}))}</p><button class="big" id="pinBtn">📲 ${esc(t('pin'))}</button>`;
- else if(PLATFORM==='ios')body=`<p>${esc(t('hsNativeI',{r:r.name}))}</p><code id="lnk">routinebuddy://run?r=${r.id}</code><button id="cpBtn">${esc(t('copyLink'))}</button>`;
+ else if(PLATFORM==='ios')body=`<p>${esc(t('hsNativeI',{r:r.name}))}</p><code id="lnk">digimaa://run?r=${r.id}</code><button id="cpBtn">${esc(t('copyLink'))}</button>`;
  else{history.replaceState(null,'',launchUrl(r)); // Add to Home Screen saves the CURRENT url, name and icon
   body=`<p>${esc(dev==='ios'?t('hsIOS',{r:r.name}):t('hsAndroid',{r:r.name}))}</p><code id="lnk">${esc(launchUrl(r))}</code><button id="cpBtn">${esc(t('copyLink'))}</button>`}
  B.innerHTML=`<div class="q">${esc(t('homeTitle',{r:r.name}))}</div><div class="bigicon" style="background:${r.color}">${r.emoji}</div><h3 style="text-align:center">${esc(r.name)}</h3>${body}
