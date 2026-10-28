@@ -10,6 +10,8 @@ const isStandalone=()=>!NATIVE&&(window.matchMedia('(display-mode: standalone)')
 const isIOSSafari=()=>{const ua=navigator.userAgent;return IOS_UA&&/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS|OPiOS/i.test(ua)};
 let deferredPrompt=null;
 if(!NATIVE)window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e});
+// iOS Safari: <link rel=manifest> start_url overrides the current URL on Add to Home Screen — remove it so ?r=…#d=… is what gets pinned.
+(function(){if(!IOS_UA)return;const m=$('manifest');if(m)m.remove();document.querySelectorAll('link[rel="manifest"]').forEach(l=>l.remove())})();
 let _syncT=null;function queueSyncUrl(r){if(NATIVE||isStandalone())return;clearTimeout(_syncT);_syncT=setTimeout(()=>syncHomeUrl(r),0)}
 // ---------- storage ----------
 const allR=()=>LS.get('routines',{});
@@ -19,7 +21,7 @@ function t(k,v){let s=S()[k];if(s==null)s=I18N.en[k];if(v)for(const x in v)s=s.s
 function applyLang(){const s=S();document.documentElement.lang=L;document.documentElement.dir=s.rtl?'rtl':'ltr';Speech.lang=s.tts;
  document.querySelectorAll('[data-t]').forEach(e=>{const v=s[e.dataset.t]??I18N.en[e.dataset.t];if(v!=null)e.textContent=v});
  const d=Math.ceil(SUB.trialLeft());$('trialTag').textContent=SUB.hasPro()?'':(d>0?t('trialLeft',{d}):'')}
-function show(id){['ob','home','launch','run','edit','paywall','about'].forEach(s=>$(s).hidden=s!==id);window.scrollTo(0,0)}
+function show(id){['ob','home','launch','run','edit','paywall','about','bring'].forEach(s=>$(s).hidden=s!==id);window.scrollTo(0,0)}
 // ---------- access policy ----------
 // 7-day trial from first launch unlocks everything. The FIRST routine can always be created (onboarding is never paywalled).
 // After the trial: running any routine or creating a 2nd+ routine requires the subscription.
@@ -37,7 +39,13 @@ function home(){syncHomeUrl();applyLang();
  Object.values(R).filter(r=>!r.kid||r.kid===activeKid()).forEach(r=>{const d=document.createElement('div');d.className='rrow';
   d.innerHTML=`<button class="rbtn" style="background:${r.color}">${r.emoji} ${esc(r.name)}</button><button class="s" title="edit">✏️</button><button class="s" title="home screen">📲</button>`;
   const b=d.querySelectorAll('button');b[0].onclick=()=>canRun()?start(r.id):show('paywall');b[1].onclick=()=>openEditor(r.id);b[2].onclick=()=>{OB_R=r;wiz.page='hs';wiz.single=true;show('ob');renderOb()};
-  $('rlist').appendChild(d)});renderSub();show('home')}
+  $('rlist').appendChild(d)});renderSub();show('home');
+ if(Object.keys(R).length){let box=$('shareBox');if(!box){box=document.createElement('div');box.id='shareBox';box.className='shareBox';$('rlist').after(box)}
+  box.innerHTML=`<button type="button" class="big" id="sendChildBtn">📤 ${esc(t('sendChild'))}</button>`+
+   ((!NATIVE&&!isStandalone())?`<button type="button" id="copyCodeHome">📋 ${esc(t('copyCode'))}</button><p class="muted small">${esc(t('hsCheckUrl'))}</p>`:'');
+  $('sendChildBtn').onclick=()=>sendToChild();const cc=$('copyCodeHome');if(cc)cc.onclick=copyRoutineCode}
+ else{const box=$('shareBox');if(box)box.remove()}}
+
 $('lang').onchange=()=>{L=$('lang').value;LS.set('lang',L);home()};
 $('mode').onchange=()=>{LS.set('mode',$('mode').value);queueSyncUrl()};$('kid').onchange=()=>{setKidName($('kid').value.trim());renderKids();queueSyncUrl()};$('tempSel').onchange=()=>{LS.set('tempUnit',$('tempSel').value);queueSyncUrl()};$('praiseSel').onchange=()=>{LS.set('praise',$('praiseSel').value);queueSyncUrl()};$('checkSel').onchange=()=>{LS.set('checkin',+$('checkSel').value);queueSyncUrl()};$('useWeather').onchange=()=>{LS.set('weather',$('useWeather').checked);queueSyncUrl()};
 $('newR').onclick=()=>canCreate()?startWizard(true):show('paywall');
@@ -136,63 +144,117 @@ const activeKid=()=>{const k=kids(),a=setting('kidActive',k[0].id);return k.some
 const kidName=id=>(kids().find(x=>x.id===id)||{}).name||'';
 function setKidName(n){const k=kids(),a=activeKid();k.forEach(x=>{if(x.id===a)x.name=n});LS.set('kids',k);queueSyncUrl()}
 // ---------- home-screen entry per routine ----------
-function b64(o){return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
-function unb64(s){try{return JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g,'+').replace(/_/g,'/')))))}catch(e){return null}}
-function packSetup(r){return{r,kidName:kidName(r.kid||activeKid()),mode:setting('mode','touch'),lang:L,tempUnit:setting('tempUnit','auto'),praise:setting('praise','every'),checkin:setting('checkin',120),weather:setting('weather',true),device:setting('device',wiz.device||null),country:setting('country',null)}}
-function launchUrl(r){const d=b64(packSetup(r));return location.origin+location.pathname+'?r='+encodeURIComponent(r.id)+'&d='+d} // query carries setup: iOS home-screen web apps get empty storage
-function primaryRoutine(){const R=allR(),kid=activeKid();const list=Object.values(R).filter(r=>!r.kid||r.kid===kid);return list[0]||Object.values(R)[0]||null}
-// Keep the address bar + manifest packed whenever Safari/Chrome has a saved setup, so Share → Add to Home Screen works even without tapping Save.
+// Compact pack + base64url. iOS: payload in HASH (#d=); no manifest link (A2HS keeps current URL).
+// Android: also put d= in the query for web-manifest start_url (hash often dropped there).
+function b64(o){return btoa(unescape(encodeURIComponent(typeof o==='string'?o:JSON.stringify(o)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function unb64(s){try{s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';return JSON.parse(decodeURIComponent(escape(atob(s))))}catch(e){return null}}
+function cStep(x){if(typeof x==='string')return x;if(x&&x.weather)return{w:1};const o={t:x.text};if(x.emoji&&x.emoji!=='⭐')o.e=x.emoji;if(x.wait)o.s=x.wait;if(x.auto!=null)o.a=x.auto===true?1:x.auto;if(x.days&&x.days.length)o.d=x.days;return o}
+function xStep(x){if(typeof x==='string')return{text:x};if(x&&x.w)return{weather:true};const o={text:x.t||x.text||''};if(x.e||x.emoji)o.emoji=x.e||x.emoji;if(x.s||x.wait)o.wait=x.s||x.wait;if(x.a!=null||x.auto!=null)o.auto=x.a!=null?(x.a===1?true:x.a):x.auto;if(x.d||x.days)o.days=x.d||x.days;return o}
+function cRoutine(r){return{i:r.id,n:r.name,e:r.emoji,c:r.color,l:r.lang||L,k:r.kid,m:r.calm?1:0,b:r.doneBy||'',s:(r.steps||[]).map(cStep)}}
+function xRoutine(o){if(!o)return null;if(o.id&&o.steps)return o;return{id:o.i||o.id,name:o.n||o.name,emoji:o.e||o.emoji||'⭐',color:o.c||o.color||'#4f46e5',lang:o.l||o.lang||L,kid:o.k||o.kid,calm:!!(o.m||o.calm),doneBy:o.b||o.doneBy||'',steps:(o.s||o.steps||[]).map(xStep)}}
+function packSetup(r){let kn='';try{kn=kidName(r.kid||activeKid())}catch(e){}
+ return{v:1,r:cRoutine(r),k:kn,m:setting('mode','touch'),l:L,u:setting('tempUnit','auto'),p:setting('praise','every'),c:setting('checkin',120),w:setting('weather',true)?1:0,d:setting('device',wiz.device||null),y:setting('country',null)}}
+function unpackSetup(data){if(!data)return null;data=Object.assign({},data);if(data.r)data.r=xRoutine(data.r);
+ if(data.kidName==null&&data.k!=null)data.kidName=data.k;if(data.mode==null&&data.m!=null)data.mode=data.m;
+ if(data.lang==null&&data.l!=null)data.lang=data.l;if(data.tempUnit==null&&data.u!=null)data.tempUnit=data.u;
+ if(data.praise==null&&data.p!=null)data.praise=data.p;if(data.checkin==null&&data.c!=null)data.checkin=data.c;
+ if(data.weather==null&&data.w!=null)data.weather=!!data.w;if(data.device==null&&data.d!=null)data.device=data.d;
+ if(data.country==null&&data.y!=null)data.country=data.y;return data}
+function encodePack(o){return b64(o)}
+function decodePack(s){if(!s)return null;return unpackSetup(unb64(s))}
+function extractPack(url){try{const u=new URL(url,location.origin);let data=null,id=u.searchParams.get('r');
+  const dq=u.searchParams.get('d');if(dq)data=decodePack(dq);
+  if(!data&&u.hash){const h=u.hash.charAt(0)==='#'?u.hash.slice(1):u.hash;const sp=new URLSearchParams(h.includes('d=')?h.replace(/^d=/,'d='):h);
+   let dv=sp.get('d');if(!dv){const m=/^(?:.*&)?d=([\s\S]*)/.exec(h);if(m)dv=m[1]}
+   if(dv)data=decodePack(decodeURIComponent(dv))}
+  if(!id&&data&&data.r)id=data.r.id;return{id,data}}catch(e){return{id:null,data:null}}}
+function launchUrl(r){const d=encodePack(packSetup(r)),id=encodeURIComponent(r.id);
+  // iOS: hash carries the setup (A2HS keeps current URL when no manifest). Android: also mirror in query for manifest start_url.
+  if(IOS_UA)return location.origin+location.pathname+'?r='+id+'#d='+d;
+  return location.origin+location.pathname+'?r='+id+'&d='+d+'#d='+d}
+// Canonical public test/app URL — never use the current address bar (may be localhost or a stale path).
+const PUBLIC_BASE='https://sagarvenkateswaran.github.io/routine-buddy-test/';
+function shareChildUrl(r){r=r||primaryRoutine();if(!r)return PUBLIC_BASE;const d=encodePack(packSetup(r));
+  return PUBLIC_BASE+'?r='+encodeURIComponent(r.id)+'#d='+d}
+function toast(msg){let el=$('toast');if(!el){el=document.createElement('div');el.id='toast';el.className='toast';document.body.appendChild(el)}
+ el.textContent=msg;el.classList.add('on');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('on'),2200)}
+async function sendToChild(r){r=r||primaryRoutine();if(!r)return;const url=shareChildUrl(r),nm=kidName(r.kid||activeKid())||'…';
+  const title=r.name||'DigiMaa',text=t('sendChildText',{r:r.name,n:nm});
+  if(navigator.share){try{await navigator.share({title,text,url});return}catch(e){if(e&&e.name==='AbortError')return}}
+  const done=()=>toast(t('linkCopied'));
+  if(navigator.clipboard&&navigator.clipboard.writeText){try{await navigator.clipboard.writeText(url);done();return}catch(e){}}
+  const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(e){}ta.remove();done()}
+function primaryRoutine(){const R=allR();let kid=null;try{kid=activeKid()}catch(e){}
+  const list=Object.values(R).filter(r=>!r.kid||!kid||r.kid===kid);return list[0]||Object.values(R)[0]||null}
 function syncHomeUrl(r){if(NATIVE||isStandalone())return;r=r||primaryRoutine();
- if(!r){if(!/\?r=/.test(location.search))return;history.replaceState(null,'',location.pathname);setHeadFor(null);return}
+ if(!r){if(!/\?r=/.test(location.search)&&!/#d=/.test(location.hash))return;history.replaceState(null,'',location.pathname);setHeadFor(null);return}
  const url=launchUrl(r);if(location.href!==url)history.replaceState(null,'',url);setHeadFor(r)}
 function iconDataUrl(r,size=180){const c=document.createElement('canvas');c.width=c.height=size;const g=c.getContext('2d');g.fillStyle=r.color||'#4f46e5';g.fillRect(0,0,size,size);
  g.font=`${size*.6}px serif`;g.textAlign='center';g.textBaseline='middle';g.fillText(r.emoji||'⭐',size/2,size*.55);return c.toDataURL('image/png')}
-function setHeadFor(r){document.title=r?r.name:'DigiMaa';$('appTitle').content=r?r.name:'DigiMaa';
- $('touchIcon').href=r?iconDataUrl(r,180):'icon-192.png';
- if(!r){$('manifest').href='manifest.webmanifest';return}
- // Dynamic manifest (SW-generated): name = parent's chosen routine name; start_url carries full setup in ?d=
- const d=b64(packSetup(r));
- $('manifest').href=`manifest.webmanifest?r=${encodeURIComponent(r.id)}&n=${encodeURIComponent(r.name)}&e=${encodeURIComponent(r.emoji||'⭐')}&c=${encodeURIComponent(r.color||'#4f46e5')}&d=${d}`}
+function setHeadFor(r){document.title=r?r.name:'DigiMaa';if($('appTitle'))$('appTitle').content=r?r.name:'DigiMaa';
+ if($('touchIcon'))$('touchIcon').href=r?iconDataUrl(r,180):'icon-192.png';
+ if(IOS_UA){const m=$('manifest');if(m)m.remove();document.querySelectorAll('link[rel="manifest"]').forEach(l=>l.remove());return}
+ let man=$('manifest');if(!man){man=document.createElement('link');man.rel='manifest';man.id='manifest';document.head.appendChild(man)}
+ if(!r){man.href='manifest.webmanifest';return}
+ const d=encodePack(packSetup(r));
+ man.href=`manifest.webmanifest?r=${encodeURIComponent(r.id)}&n=${encodeURIComponent(r.name)}&e=${encodeURIComponent(r.emoji||'⭐')}&c=${encodeURIComponent(r.color||'#4f46e5')}&d=${d}`}
+function importSetup(data,id){if(!data||!data.r)return false;data=unpackSetup(data);const rid=id||data.r.id;if(!rid)return false;
+  if(data.lang&&I18N[data.lang]){L=data.lang;LS.set('lang',L)}
+  if(data.mode)LS.set('mode',data.mode);if(data.tempUnit)LS.set('tempUnit',data.tempUnit);if(data.praise)LS.set('praise',data.praise);
+  if(data.checkin!=null)LS.set('checkin',data.checkin);if(data.weather!=null)LS.set('weather',!!data.weather);
+  if(data.device)LS.set('device',data.device);if(data.country)LS.set('country',data.country);
+  const R=allR();R[rid]=data.r;
+  if(data.kidName){const k=kids();let c=k.find(x=>x.name===data.kidName);if(!c){if(k.length===1&&!k[0].name){k[0].name=data.kidName;c=k[0]}else{c={id:'k'+Date.now().toString(36),name:data.kidName};k.push(c)}LS.set('kids',k)}
+   R[rid].kid=c.id;LS.set('kidActive',c.id)}
+  saveR(R);return true}
+function routineCode(r){r=r||primaryRoutine();return r?encodePack(packSetup(r)):''}
+function copyRoutineCode(){const code=routineCode();if(!code)return;const done=()=>{[$('copyCodeBtn'),$('copyCodeHome')].forEach(b=>{if(b)b.textContent=t('codeCopied')})};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(code).then(done).catch(fallback);else fallback();
+  function fallback(){const ta=document.createElement('textarea');ta.value=code;document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(e){}ta.remove();done()}}
+function showBringOver(){applyLang();show('bring');$('bringIn').value='';$('bringGo').onclick=()=>{const raw=($('bringIn').value||'').trim();
+  let data=decodePack(raw);if(!data){const ex=extractPack(raw.startsWith('http')?raw:location.origin+'/?#'+raw);data=ex.data;if(data&&ex.id&&data.r&&!data.r.id)data.r.id=ex.id}
+  if(!data||!data.r){alert(t('bringHelp'));return}
+  importSetup(data,data.r.id);home();if(canRun())start(data.r.id)}}
 function showHSAfterSave(r){if(!r)return home();if(NATIVE||isStandalone())return home();OB_R=r;wiz={page:'hs',single:true};show('ob');renderOb()}
 function renderHS(B,r){const dev=setting('device',wiz.device||(IOS_UA?'ios':'android'));setHeadFor(r);
- if(!NATIVE)history.replaceState(null,'',launchUrl(r)); // Add to Home Screen / install saves the CURRENT url, name and icon
+ if(!NATIVE)history.replaceState(null,'',launchUrl(r));
  let body='';
  if(PLATFORM==='android')body=`<p>${esc(t('hsNativeA',{r:r.name}))}</p><button class="big" id="pinBtn">📲 ${esc(t('pin'))}</button>`;
  else if(PLATFORM==='ios')body=`<p>${esc(t('hsNativeI',{r:r.name}))}</p><code id="lnk">digimaa://run?r=${r.id}</code><button id="cpBtn">${esc(t('copyLink'))}</button>`;
  else if(isStandalone())body=`<p class="muted">${esc(t('hsAlready'))}</p>`;
  else if(IOS_UA){
-  if(isIOSSafari())body=`<div class="hsGuide"><p class="hsLead">${esc(t('hsIOSTitle',{r:r.name}))}</p>
+  body=`<p class="muted small">${esc(t('hsCheckUrl'))}</p>`;
+  if(isIOSSafari())body+=`<div class="hsGuide"><p class="hsLead">${esc(t('hsIOSTitle',{r:r.name}))}</p>
    <ol class="hsSteps"><li><div class="hsIcon share" aria-hidden="true"><svg viewBox="0 0 24 24" width="36" height="36"><path fill="#4f46e5" d="M12 3l4 4h-3v8h-2V7H8l4-4zm-7 14h14v2H5v-2z"/></svg></div><div>${esc(t('hsIOS1'))}</div></li>
    <li><div class="hsIcon">＋⬜</div><div>${esc(t('hsIOS2'))}</div></li>
    <li><div class="hsIcon">✓</div><div>${esc(t('hsIOS3'))}</div></li></ol>
    <div class="hsArrow" aria-hidden="true"><span>${esc(t('hsIOSShare'))}</span><div class="hsShareBtn">□↑</div></div></div>`;
-  else body=`<p>${esc(t('hsIOSOther'))}</p><div class="hsGuide"><ol class="hsSteps"><li><div class="hsIcon share">□↑</div><div>${esc(t('hsIOS1'))}</div></li><li><div class="hsIcon">＋⬜</div><div>${esc(t('hsIOS2'))}</div></li><li><div class="hsIcon">✓</div><div>${esc(t('hsIOS3'))}</div></li></ol></div>`}
+  else body+=`<p>${esc(t('hsIOSOther'))}</p><div class="hsGuide"><ol class="hsSteps"><li><div class="hsIcon share">□↑</div><div>${esc(t('hsIOS1'))}</div></li><li><div class="hsIcon">＋⬜</div><div>${esc(t('hsIOS2'))}</div></li><li><div class="hsIcon">✓</div><div>${esc(t('hsIOS3'))}</div></li></ol></div>`;
+  body+=`<button class="big" id="copyCodeBtn">📋 ${esc(t('copyCode'))}</button>`}
  else{
   if(deferredPrompt)body=`<p>${esc(t('homeTitle',{r:r.name}))}</p><button class="big" id="installBtn">📲 ${esc(t('hsAdd'))}</button>`;
-  else body=`<p>${esc(t('hsAndroidGuide',{r:r.name}))}</p>`}
+  else body=`<p>${esc(t('hsAndroidGuide',{r:r.name}))}</p>`;
+  body+=`<button id="copyCodeBtn">📋 ${esc(t('copyCode'))}</button>`}
  B.innerHTML=`<div class="q">${esc(t('homeTitle',{r:r.name}))}</div><div class="bigicon" style="background:${r.color}">${r.emoji}</div><h3 style="text-align:center">${esc(r.name)}</h3>${body}
   ${(!NATIVE&&!isStandalone())?`<button class="ghost" id="notNow">${esc(t('later'))}</button>`:''}
-  <button class="big" id="openR">${esc(t('openR'))}</button>`+(setting('mode','touch')==='voice'?`<p class="muted">${esc(dev==='ios'?t('speechIOS'):t('speechAndroid'))}</p>`:'');
+  <button class="big" id="openR">${esc(t('openR'))}</button><button id="sendChildHS">📤 ${esc(t('sendChild'))}</button>`+(setting('mode','touch')==='voice'?`<p class="muted">${esc(dev==='ios'?t('speechIOS'):t('speechAndroid'))}</p>`:'');
  if($('pinBtn'))$('pinBtn').onclick=()=>NP('RoutineShortcuts').pin({id:r.id,label:r.name,emoji:r.emoji,color:r.color}).catch(e=>alert(e.message||e));
  if($('cpBtn'))$('cpBtn').onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText($('lnk').textContent);$('cpBtn').textContent=t('copied')};
  if($('installBtn'))$('installBtn').onclick=async()=>{if(!deferredPrompt)return;deferredPrompt.prompt();try{await deferredPrompt.userChoice}catch(e){}deferredPrompt=null;$('installBtn').hidden=true};
+ if($('copyCodeBtn'))$('copyCodeBtn').onclick=copyRoutineCode;
  if($('notNow'))$('notNow').onclick=()=>{wiz={};home()};
+ if($('sendChildHS'))$('sendChildHS').onclick=()=>sendToChild(r);
  $('openR').onclick=()=>canRun()?start(r.id):show('paywall')}
 // ---------- launching straight into a routine ----------
-function routeLaunch(url){let id=null,data=null;try{const u=new URL(url,location.origin);id=u.searchParams.get('r');
-  const dq=u.searchParams.get('d');if(dq)data=unb64(dq);else{const m=/[#&?]d=([^&]+)/.exec(u.hash||'');if(m)data=unb64(m[1])}}catch(e){}
- if(!id&&data&&data.r)id=data.r.id;if(!id)return false;
- const empty=!Object.keys(allR()).length; // iOS home-screen apps start with empty storage — import packed setup
- if(data&&data.r&&(empty||!allR()[id])){if(empty){if(data.lang&&I18N[data.lang]){L=data.lang;LS.set('lang',L)}
-  if(data.mode)LS.set('mode',data.mode);if(data.tempUnit)LS.set('tempUnit',data.tempUnit);if(data.praise)LS.set('praise',data.praise);
-  if(data.checkin!=null)LS.set('checkin',data.checkin);if(data.weather!=null)LS.set('weather',data.weather);
-  if(data.device)LS.set('device',data.device);if(data.country)LS.set('country',data.country)}
-  const R=allR();R[id]=data.r;saveR(R);
-  if(data.kidName){const k=kids();let c=k.find(x=>x.name===data.kidName);if(!c){if(k.length===1&&!k[0].name){k[0].name=data.kidName;c=k[0]}else{c={id:'k'+Date.now().toString(36),name:data.kidName};k.push(c)}LS.set('kids',k)}
-   R[id].kid=c.id;LS.set('kidActive',c.id);saveR(R)}}
- const r=allR()[id];if(!r)return false;if(!canRun()){show('paywall');return true}
- if(NATIVE){start(id);return true} // native TTS needs no tap
- setHeadFor(r);$('lIcon').style.background=r.color;$('lIcon').textContent=r.emoji;$('lName').textContent=r.name;$('lStart').onclick=()=>start(id);show('launch');return true} // browsers only allow speech after a tap
+function routeLaunch(url){const{id,data}=extractPack(url);if(!id&&!(data&&data.r))return false;
+ const rid=id||(data&&data.r&&data.r.id);const empty=!Object.keys(allR()).length;
+ const imported=!!(data&&data.r&&(empty||!allR()[rid])&&importSetup(data,rid));
+ const r=allR()[rid];if(!r)return false;
+ if(!canRun()){show('paywall');return true}
+ // Child opened a shared link in the browser → load routine + show Add to Home Screen guide
+ if(!NATIVE&&!isStandalone()&&(imported||!!data)){OB_R=r;wiz={page:'hs',single:true};show('ob');renderOb();return true}
+ if(NATIVE){start(rid);return true}
+ setHeadFor(r);$('lIcon').style.background=r.color;$('lIcon').textContent=r.emoji;$('lName').textContent=r.name;$('lStart').onclick=()=>start(rid);show('launch');return true}
 // ---------- weather (optional, device location) ----------
 // Temperature unit follows where the device actually is (not the UI language). Decisions are made in °C; °F only for speaking.
 const F_COUNTRIES=['US','PR','GU','VI','AS','MP','UM','LR','BS','BZ','KY','PW','FM','MH'];
@@ -269,10 +331,18 @@ $('erSave').onclick=()=>{collectSteps($('erSteps'),EDR);EDR.name=$('erName').val
 $('erHS').onclick=()=>$('erSave').onclick();
 $('erDel').onclick=()=>{if(!confirm(t('del')+'?'))return;const R=allR();delete R[EDR.id];saveR(R);home()};
 // ---------- boot ----------
-(async()=>{await SUB.init();applyLang();
+(async()=>{
+ // Parse packed URL FIRST — before trial/onboarding — so standalone iOS can restore the routine
+ const launched=routeLaunch(location.href);
+ await SUB.init();applyLang();
  if(NATIVE&&NP('App')){NP('App').addListener('appUrlOpen',e=>routeLaunch(e.url));try{const u=await NP('App').getLaunchUrl();if(u&&u.url&&routeLaunch(u.url))return}catch(e){}}
- if(routeLaunch(location.href))return;
- // Safari (not home-screen yet): keep URL packed so Share → Add to Home Screen carries the routine
- if(!Object.keys(allR()).length)return startWizard(false);home();
+ if(launched)return;
+ if(!Object.keys(allR()).length){
+  if(isStandalone())return showBringOver();
+  return startWizard(false)}
+ home();
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')queueSyncUrl()})})();
-if('serviceWorker'in navigator&&!NATIVE&&(location.protocol==='https:'||location.hostname==='127.0.0.1'||location.hostname==='localhost'))navigator.serviceWorker.register('sw.js').catch(()=>{});
+if('serviceWorker'in navigator&&!NATIVE&&(location.protocol==='https:'||location.hostname==='127.0.0.1'||location.hostname==='localhost')){
+ let refreshing=false;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(refreshing)return;refreshing=true;location.reload()});
+ navigator.serviceWorker.register('sw.js?v=4').then(reg=>{if(reg.waiting)reg.waiting.postMessage({type:'SKIP_WAITING'});
+  reg.addEventListener('updatefound',()=>{const w=reg.installing;if(!w)return;w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)w.postMessage({type:'SKIP_WAITING'})})})}).catch(()=>{})}
